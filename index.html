@@ -78,16 +78,28 @@
   <script src="config.js"></script>
   <script>
     // WAKE_CONFIG comes from config.js (gitignored - copy config.example.js to create it)
-    const { MQTT_HOST, MQTT_WSS_PORT, MQTT_USER, MQTT_PASS, WAKE_TOPIC, WAKE_PAYLOAD } = WAKE_CONFIG;
+    const { MQTT_HOST, MQTT_WSS_PORT, MQTT_USER, MQTT_PASS, WAKE_TOPIC, ACK_TOPIC } = WAKE_CONFIG;
 
     const btn = document.getElementById('wakeBtn');
     const dot = document.getElementById('dot');
     const statusText = document.getElementById('statusText');
     const log = document.getElementById('log');
 
-    function setLog(msg) {
+    function setLog(msg, holdMs = 3000) {
       log.textContent = msg;
-      setTimeout(() => { if (log.textContent === msg) log.textContent = ''; }, 3000);
+      setTimeout(() => { if (log.textContent === msg) log.textContent = ''; }, holdMs);
+    }
+
+    // Each tap gets its own nonce, echoed back by the ESP32 on ACK_TOPIC once
+    // it actually receives the wake message - confirms the device got it,
+    // not just that the broker accepted the publish.
+    const ACK_TIMEOUT_MS = 6000;
+    let pendingNonce = null;
+    let pendingTimer = null;
+
+    function clearPending() {
+      pendingNonce = null;
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
     }
 
     const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_WSS_PORT}/mqtt`, {
@@ -103,6 +115,7 @@
       statusText.textContent = 'Connected';
       btn.disabled = false;
       btn.textContent = 'Wake PC';
+      client.subscribe(ACK_TOPIC, { qos: 1 });
     });
 
     client.on('reconnect', () => {
@@ -123,13 +136,31 @@
       setLog(err.message || 'MQTT error');
     });
 
+    client.on('message', (topic, payload) => {
+      if (topic !== ACK_TOPIC) return;
+      if (payload.toString() !== pendingNonce) return; // stale/foreign ack
+      clearPending();
+      setLog('ESP confirmed receipt ✓');
+    });
+
     btn.addEventListener('click', () => {
       if (!client.connected) return;
-      client.publish(WAKE_TOPIC, WAKE_PAYLOAD, { qos: 1 }, (err) => {
+      clearPending();
+      const nonce = 'wake-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      pendingNonce = nonce;
+      pendingTimer = setTimeout(() => {
+        if (pendingNonce === nonce) {
+          clearPending();
+          setLog('Sent, but no confirmation from ESP - it may be offline or stuck', 5000);
+        }
+      }, ACK_TIMEOUT_MS);
+
+      client.publish(WAKE_TOPIC, nonce, { qos: 1 }, (err) => {
         if (err) {
+          clearPending();
           setLog('Publish failed: ' + err.message);
         } else {
-          setLog('Sent ' + new Date().toLocaleTimeString());
+          setLog('Sent, waiting for confirmation...');
         }
       });
       btn.classList.remove('pulse');

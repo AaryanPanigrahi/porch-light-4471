@@ -7,5 +7,5 @@ const WAKE_CONFIG = {
   MQTT_USER: "wake-button-public",
   MQTT_PASS: "hello123",
   WAKE_TOPIC: "home/pc/wake",
-  WAKE_PAYLOAD: "ON",
+  ACK_TOPIC: "home/pc/wake/ack",
 };
