@@ -16,7 +16,6 @@
     --text: #c9d1d9;
     --muted: #8b949e;
     --accent: #238636;
-    --accent-hover: #2ea043;
     --accent-active: #196f3d;
     --danger: #f85149;
     --border: #30363d;
@@ -40,133 +39,139 @@
     color: white;
     font-size: 1.3rem; font-weight: 700;
     cursor: pointer;
-    box-shadow: 0 0 0 0 rgba(35,134,54,0.5);
-    transition: background 0.15s, transform 0.1s;
   }
-  #wakeBtn:active { transform: scale(0.96); background: var(--accent-active); }
+  #wakeBtn:active { background: var(--accent-active); }
   #wakeBtn:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
-  #wakeBtn.pulse {
-    animation: pulse 1s ease-out;
+  #log { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
+
+  /* Login overlay: covers everything, so there is no path to the button
+     without a valid session - it isn't just visually on top, the button
+     stays disabled underneath until a token exists. */
+  #loginOverlay {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
   }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(35,134,54,0.6); }
-    100% { box-shadow: 0 0 0 30px rgba(35,134,54,0); }
+  #loginOverlay.hidden { display: none; }
+  #loginForm {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; width: min(90vw, 280px);
+    display: flex; flex-direction: column; gap: 10px;
   }
-  #status {
-    font-size: 0.85rem; color: var(--muted);
-    display: flex; align-items: center; gap: 8px;
+  #loginForm input {
+    padding: 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 0.95rem;
   }
-  #dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--danger);
-    transition: background 0.3s;
+  #loginForm button {
+    padding: 9px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-weight: 600; cursor: pointer;
   }
-  #dot.connected { background: var(--accent-hover); }
-  #log {
-    font-size: 0.75rem; color: var(--muted);
-    min-height: 1.2em;
-  }
+  #loginError { font-size: 0.8rem; color: var(--danger); min-height: 1em; }
 </style>
 </head>
 <body>
   <h1>Wake-on-LAN</h1>
-  <button id="wakeBtn" disabled>Connecting...</button>
-  <div id="status"><span id="dot"></span><span id="statusText">Connecting to broker...</span></div>
+  <button id="wakeBtn" disabled>Wake PC</button>
   <div id="log"></div>
 
-  <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+  <div id="loginOverlay">
+    <form id="loginForm">
+      <input id="username" type="text" placeholder="Username" autocomplete="username" required autofocus>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit">Log in</button>
+      <div id="loginError"></div>
+    </form>
+  </div>
+
   <script src="config.js"></script>
   <script>
-    // WAKE_CONFIG comes from config.js (gitignored - copy config.example.js to create it)
-    const { MQTT_HOST, MQTT_WSS_PORT, MQTT_USER, MQTT_PASS, WAKE_TOPIC, ACK_TOPIC } = WAKE_CONFIG;
+    const { WORKER_URL } = WAKE_CONFIG;
+    const TOKEN_KEY = 'wake_button_token';
 
     const btn = document.getElementById('wakeBtn');
-    const dot = document.getElementById('dot');
-    const statusText = document.getElementById('statusText');
     const log = document.getElementById('log');
+    const overlay = document.getElementById('loginOverlay');
+    const loginForm = document.getElementById('loginForm');
+    const loginError = document.getElementById('loginError');
 
-    function setLog(msg, holdMs = 3000) {
+    function setLog(msg, holdMs = 4000) {
       log.textContent = msg;
       setTimeout(() => { if (log.textContent === msg) log.textContent = ''; }, holdMs);
     }
 
-    // Each tap gets its own nonce, echoed back by the ESP32 on ACK_TOPIC once
-    // it actually receives the wake message - confirms the device got it,
-    // not just that the broker accepted the publish.
-    const ACK_TIMEOUT_MS = 6000;
-    let pendingNonce = null;
-    let pendingTimer = null;
-
-    function clearPending() {
-      pendingNonce = null;
-      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+    function getToken() {
+      return localStorage.getItem(TOKEN_KEY);
+    }
+    function setToken(token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    }
+    function clearToken() {
+      localStorage.removeItem(TOKEN_KEY);
     }
 
-    const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_WSS_PORT}/mqtt`, {
-      username: MQTT_USER,
-      password: MQTT_PASS,
-      clientId: 'wake-btn-' + Math.random().toString(16).slice(2, 10),
-      reconnectPeriod: 3000,
-      connectTimeout: 8000,
-    });
-
-    client.on('connect', () => {
-      dot.classList.add('connected');
-      statusText.textContent = 'Connected';
+    function showLogin() {
+      btn.disabled = true;
+      overlay.classList.remove('hidden');
+    }
+    function showButton() {
+      overlay.classList.add('hidden');
       btn.disabled = false;
-      btn.textContent = 'Wake PC';
-      client.subscribe(ACK_TOPIC, { qos: 1 });
-    });
+    }
 
-    client.on('reconnect', () => {
-      dot.classList.remove('connected');
-      statusText.textContent = 'Reconnecting...';
-      btn.disabled = true;
-      btn.textContent = 'Connecting...';
-    });
+    // Button only unlocks once a token exists locally - but the real gate is
+    // server-side: /button/wake rejects any request without a valid token,
+    // so there's no way to trigger the wake without having logged in.
+    if (getToken()) {
+      showButton();
+    } else {
+      showLogin();
+    }
 
-    client.on('offline', () => {
-      dot.classList.remove('connected');
-      statusText.textContent = 'Offline';
-      btn.disabled = true;
-    });
-
-    client.on('error', (err) => {
-      statusText.textContent = 'Connection error';
-      setLog(err.message || 'MQTT error');
-    });
-
-    client.on('message', (topic, payload) => {
-      if (topic !== ACK_TOPIC) return;
-      if (payload.toString() !== pendingNonce) return; // stale/foreign ack
-      clearPending();
-      setLog('ESP confirmed receipt ✓');
-    });
-
-    btn.addEventListener('click', () => {
-      if (!client.connected) return;
-      clearPending();
-      const nonce = 'wake-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-      pendingNonce = nonce;
-      pendingTimer = setTimeout(() => {
-        if (pendingNonce === nonce) {
-          clearPending();
-          setLog('Sent, but no confirmation from ESP - it may be offline or stuck', 5000);
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginError.textContent = '';
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      try {
+        const res = await fetch(`${WORKER_URL}/button/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+          loginError.textContent = 'Wrong username or password';
+          return;
         }
-      }, ACK_TIMEOUT_MS);
+        const { access_token } = await res.json();
+        setToken(access_token);
+        showButton();
+      } catch (err) {
+        loginError.textContent = 'Login request failed';
+      }
+    });
 
-      client.publish(WAKE_TOPIC, nonce, { qos: 1 }, (err) => {
-        if (err) {
-          clearPending();
-          setLog('Publish failed: ' + err.message);
-        } else {
-          setLog('Sent, waiting for confirmation...');
+    btn.addEventListener('click', async () => {
+      const token = getToken();
+      if (!token) { showLogin(); return; }
+
+      btn.disabled = true;
+      setLog('Sending...');
+      try {
+        const res = await fetch(`${WORKER_URL}/button/wake`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (res.status === 401) {
+          clearToken();
+          showLogin();
+          return;
         }
-      });
-      btn.classList.remove('pulse');
-      void btn.offsetWidth; // restart animation
-      btn.classList.add('pulse');
-      if (navigator.vibrate) navigator.vibrate(40);
+        const data = await res.json();
+        setLog(data.acked ? 'ESP confirmed receipt ✓' : 'Sent, but no confirmation from ESP - it may be offline or stuck', 5000);
+      } catch (err) {
+        setLog('Request failed');
+      } finally {
+        btn.disabled = false;
+      }
     });
   </script>
 </body>
