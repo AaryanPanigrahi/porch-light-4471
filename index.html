@@ -59,13 +59,20 @@
   }
   #loginForm input {
     padding: 9px; border-radius: 6px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 0.95rem;
+    background: var(--bg); color: var(--text); font-size: 0.95rem; width: 100%;
   }
   #loginForm button {
     padding: 9px; border-radius: 6px; border: none;
     background: var(--accent); color: white; font-weight: 600; cursor: pointer;
   }
   #loginError { font-size: 0.8rem; color: var(--danger); min-height: 1em; }
+  .pwRow { position: relative; display: flex; }
+  .pwRow input { padding-right: 36px; }
+  #togglePw {
+    position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 1rem; padding: 6px 8px; line-height: 1;
+  }
 </style>
 </head>
 <body>
@@ -75,8 +82,13 @@
 
   <div id="loginOverlay">
     <form id="loginForm">
-      <input id="username" type="text" placeholder="Username" autocomplete="username" required autofocus>
-      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <input id="username" type="text" placeholder="Username" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
+      <div class="pwRow">
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password"
+               autocapitalize="off" autocorrect="off" spellcheck="false" required>
+        <button type="button" id="togglePw" aria-label="Show password">👁</button>
+      </div>
       <button type="submit">Log in</button>
       <div id="loginError"></div>
     </form>
@@ -92,6 +104,14 @@
     const overlay = document.getElementById('loginOverlay');
     const loginForm = document.getElementById('loginForm');
     const loginError = document.getElementById('loginError');
+    const togglePw = document.getElementById('togglePw');
+    const passwordInput = document.getElementById('password');
+
+    togglePw.addEventListener('click', () => {
+      const show = passwordInput.type === 'password';
+      passwordInput.type = show ? 'text' : 'password';
+      togglePw.textContent = show ? '🙈' : '👁';
+    });
 
     function setLog(msg, holdMs = 4000) {
       log.textContent = msg;
@@ -129,8 +149,8 @@
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       loginError.textContent = '';
-      const username = document.getElementById('username').value;
-      const password = document.getElementById('password').value;
+      const username = document.getElementById('username').value.trim();
+      const password = passwordInput.value;
       try {
         const res = await fetch(`${WORKER_URL}/button/login`, {
           method: 'POST',
