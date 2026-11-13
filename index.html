@@ -43,6 +43,7 @@
   #wakeBtn:active { background: var(--accent-active); }
   #wakeBtn:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
   #log { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
+  #restartInfo { font-size: 0.75rem; color: var(--muted); opacity: 0.7; }
 
   /* Login overlay: covers everything, so there is no path to the button
      without a valid session - it isn't just visually on top, the button
@@ -79,6 +80,7 @@
   <h1>Wake-on-LAN</h1>
   <button id="wakeBtn" disabled>Wake PC</button>
   <div id="log"></div>
+  <div id="restartInfo"></div>
 
   <div id="loginOverlay">
     <form id="loginForm">
@@ -135,6 +137,25 @@
     function showButton() {
       overlay.classList.add('hidden');
       btn.disabled = false;
+      loadRestartInfo();
+    }
+
+    const restartInfo = document.getElementById('restartInfo');
+    async function loadRestartInfo() {
+      const token = getToken();
+      if (!token) return;
+      try {
+        const res = await fetch(`${WORKER_URL}/button/status`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const { last_restart } = await res.json();
+        restartInfo.textContent = last_restart
+          ? `Last ESP restart: ${new Date(last_restart).toLocaleString()}`
+          : '';
+      } catch (err) {
+        // Non-critical - just leave the line blank.
+      }
     }
 
     // Button only unlocks once a token exists locally - but the real gate is
